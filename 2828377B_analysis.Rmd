@@ -1,0 +1,1070 @@
+---
+title: "Investigating Lead Contamination in the Glasgow City Region."
+author: "Subasish Behera"
+output:
+  pdf_document:
+    latex_engine: xelatex
+    number_sections: yes
+    toc: yes
+  fig_caption: yes
+  editor_options:
+    markdown:
+      wrap: 72
+---
+
+```{r setup, include = FALSE, echo = FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, eval = TRUE, include = TRUE, comment = NA, message = FALSE)
+```
+
+```{r R_libraries, include=FALSE}
+library(tidyverse)
+library(sf)
+library(RColorBrewer)
+library(gridExtra)
+library(kableExtra)
+library(skimr)
+library(reticulate)
+library(geoR)
+library(sp)
+library(mgcv)
+library(e1071)
+library(caret)
+library(broom)
+library(gridExtra)
+library(cowplot)
+```
+
+\newpage
+
+# Introduction {#sec:intro}
+
+## Project Background
+
+The research project undertakes an investigation of top-soil
+concentration of the heavy-metal Lead (Pb) in the Glasgow City Region.
+Small amounts of Lead can be found naturally in the soil, but
+concentrations are enhanced by man-made activities. Research suggests
+that lead contaminated soil and dust are the most important factors of
+high blood lead level(Lanphear, B. P. et al., 1997). Adverse health
+problems from high blood lead level has been well documented through out
+the world. Chronic exposure to low-level lead has been linked to several
+developmental problems, especially for pre-school children(Needleman H.
+L., et al., 1990). There is still much on-going research to solidify the
+relationship between lead amount found in soil and amount that is
+absorbed by humans through exposure.
+
+## Aims and Objectives
+
+The primary objective of this report is to investigate the processes
+that lead to accumulation of Pb in the top-soil of the Glasgow City
+Region. This broad objective can be divided into four sub-objectives
+that will provide more insight into the underlying factors:
+
+1.  To identify the spatial pattern of Pb contamination in the Glasgow
+    area.\
+2.  To identify clusters of contamination, if there exists any.\
+3.  To quantify the effects of co-variates on the Pb concentration.\
+
+The objectives render the research problem as firstly a spatial problem
+where the concentration values are mapped across the study region. This
+is followed by a regression problem which may or may not involve
+adjusting for a spatial component depending on the strength of
+correlation between response variable. The completion of the objectives
+has social-importance as it will help the officials investigate highly
+contaminated areas and use the predictions to identify potentially
+hazardous areas. This is aimed at sustainable development and planning
+for the Glasgow City Region.
+
+## Description of the data {#sec:datadesc}
+
+The study area includes each of the eight local councils that constitute
+the Glasgow City region, i.e. Glasgow City council, Invercylde council,
+Renfrewshire council, East Renfrewshire council, East Dunbartonshire
+council, West Dunbartonshire council, North Lanarkshire council, and
+South Lanarkshire council. The data used in this project is a subset
+derived from a wide range of datasets collected by the British
+Geological Survey (BGS) between 2001 and 2011 for the Geo-chemical
+Baseline Survey of the Environment (G-BASE) project. This served as the
+foundation for the multi-disciplinary project titled 'Clyde Basin Urban
+Super Project' (CUSP) which was carried out in an attempt to provide
+sustainable planning and development in Scotland's major urban areas.
+
+The soil survey in the Clyde Basin for the CUSP was conducted in two
+parts.The first part included sample collection from the urban and
+sub-urban area of Glasgow city in 2001-2002. The second part included
+sample collection from the remaining urban cities in the study region
+and also the rural areas.
+
+The Co-ordinate Reference System used for this data is British National
+Grid (EPSG: 27700) which presents the co-ordinates in Easting and
+Northing. The response variable under study is the top-soil Pb
+concentration in the Glasgow City Region, which is measured in parts per
+million (ppm). Along with the concentration value, other co-variates
+relating to the location of sample were also collected. The co-variates
+involved and their short description is given in Table \ref{tab:table1}.
+
+```{r dataset, include = T}
+
+#Loading dataset
+lead_data <- read.csv("input/GbaseProjectPb.csv")
+colnames_desc <- c('Eastings (in meters)',
+                   'Northings (in meters)',
+                   'Lead concentration (in ppm)',
+                   'Sample height above or below the mean sea level (in meters)',
+                   'Change in elevation over a certain distance',
+                   'Orientation of maximum slope measured clockwise',
+                   'Affects convergence/divergence of flow across the surface',
+                   'Affects acceleration/deceleration of flow across the surface',
+                   'tendency of area to accumulate water',
+                   'characterizes flat bottom areas  ',
+                   'characterizes high flat areas',
+                   'population density per km²',
+                   'categorical with levels:\n 1, 3, 4, 7, 9, 10, 11, 12, 13, 14, 19, 20, 21, '
+)
+dataset_desc <- cbind(colnames(lead_data), colnames_desc)
+colnames(dataset_desc) <- c("Variable Name", "Description")
+
+kable(dataset_desc, caption = '\\label{tab:table1} Description of variables in the dataset') %>% 
+  kable_styling(font_size = 10, latex_options = "hold_position")
+```
+
+*All the inherent variables are continuous except `Landuse`. The context
+of the levels of `Landuse` are not provided. The number of categories
+matches with that specified in National Land Use Database(NLUD) project.
+However the mapping of codes to its meaning is unknown and there is a
+mismatch between the total categories available here and those used in
+the original report. The link to the original report published by the
+BGS and the National Land Use Database project's guideline is provided
+in the section* \ref{sec:references}.
+
+# Description of Statistical Methods {#sec:methoddesc}
+
+## Ordinary Least Squares Linear Model
+
+Linear regression is referred to as a parametric approach for modelling
+a scalar response variable (also referred to as dependent variable)
+using one or more explanatory variables (also called independent
+variables). This statistical model models the linear relationship
+between the response and explanatory variables and takes the parametric
+form:
+
+$$y_i = \beta_0 + \beta_{1}x_{1i} + \beta_{2}x_{2i} + \ldots + \beta_{p}x_{pi} + \epsilon_i, ~~~~ \epsilon_i \sim \mathcal{N}(0, \sigma^2) ~~~ i = 1, \ldots, n$$
+
+The above equation is often expressed in a very convenient vector-matrix
+form as follows:
+
+$$Y = X\beta~+~\epsilon, ~~~ where~E(\epsilon) = \vec0~and~Var(\epsilon) = \Sigma $$
+also, $$\sum = \begin{bmatrix} \sigma^2 & 0 & 0 & \ldots & 0\\
+0 & \sigma^2 & 0 & \ldots & 0 \\
+\vdots & \vdots & \vdots & &\vdots
+\\0 & 0 & 0 & \ldots & \sigma^2
+\end{bmatrix}$$
+
+The $\Sigma$ is termed as the associated variance-covariance matrix of
+the error terms.
+
+Now, it is also mathematically equivalent to notate the above
+information as follows: $$Y \sim \mathcal{N}(X\beta, \Sigma) $$
+
+The beta parameters are estimated by the method of least-squares, which
+minimizes the sum of squared errors given by:
+
+$$S(\beta) = \sum_{i}(y_i~-~x_{i}^T\beta)^2~=~(Y-X\beta)^T(Y-X\beta)$$\
+The minimization of the above equation gives the estimated beta
+parameters, which in vector-matrix notation is given by:
+
+$$\hat{\beta} = (X^TX)^{-1}(X^TY) $$ By extension, the estimated errors
+(residuals) is calculated as $\hat\epsilon = (Y - X\hat\beta)$
+
+It is best practice to include an interval of estimates which provides a
+range of plausible values with some confidence, rather than a single
+estimate. The interval, called the confidence interval is calculated for
+the beta parameters as follows:
+
+$$\hat\beta_i \pm~t(n-p, \frac{\alpha}{2})\sqrt{(\boldsymbol{X}^T\boldsymbol{X})^{-1}_{ii}}$$
+where, t(.) refers to the Student's t-distribution with $n-p$ degrees of
+freedom, $\alpha$ refers to the significance level (often, though not
+necessarily set to 5%), $\text{S.E}(\beta_i)$ refers to the standard
+error of the beta parameters.
+
+There are a certain number of assumptions associated with this modelling
+approach, which are stated as:
+
+-   The mean of the error terms $\epsilon_i$ is zero.
+
+-   The variance of the error terms is constant for all values of
+    independent variables.
+
+-   The errors are independent for all observations.
+
+-   The errors have a normal distribution.
+
+The assumption of independent errors gives a certain structure to the
+variance-covariance of the population under study. The off-diagonal
+elements of the variance-covariance matrix(given by $\Sigma$ above) is 0
+indicating independence of the errors. This assumption of independent
+errors is certainly not true for situations where the data under study
+has some temporal or spatial correlation. The correlation of the values
+of response variable indicates that when a statistical model is employed
+to model these data, the residuals generated will have some degree of
+correlation and the off-diagonal elements in the variance-covariance
+matrix will not be zero anymore, but rather will have a value dependent
+on the inherent correlation structure of the data (which is often
+unknown and estimated).
+
+## Spatial Model: accommodating spatial autocorrelation
+
+When the data used in a study has an inherent spatial correlation, the
+assumption of independent errors is violated and thus, is needed to be
+addressed. The way to incorporate the spatial correlation is discussed.
+
+The first Law of Geography, as stated by Waldo Tobler goes as follows:
+
+$"Everything~is~related~to~everything~else,~but~near~things~are~more~related~than~distant~things."$
+
+This adage serves as the foundation upon which spatial modelling
+resides. So, the degree to which the two values will be correlated in a
+spatial setting will depend on how far the two values reside in space
+i.e., the distance. There are a number of distance metrics available
+that allows a practitioner to quantify how far the values reside, and
+again, depending on the type of data being modeled, one is preferred
+over another.
+
+### Geostatistical Process:
+
+The spatial process appropriate and therefore used for the data in hand
+is called the 'geostatistical process', which is defined as:\
+
+$${Y(\textbf{s}): \textbf{s} \in D}$$ where $D$ serves as a subset of
+the 2-dimensional space $\mathbb{R^2}$, i.e., the study region. The
+locations $\textbf{s}$ = $(s_1, s_2)$ varies continuously over the
+region $D$, but in practice only a sample of locations are selected and
+rest of the locations are generally needed to be predicted with some
+approximation of spatial smoothness.
+
+The covariance of values at two locations is given by:
+$$C(\textbf{s}, \textbf{t}) = Cov[Y(\textbf{s}), Y(\textbf{t})] \\ =E(Y(\textbf{s})Y(\textbf{t})) - \mu(\textbf{s})\mu(\textbf{t})$$
+where $\mu(\textbf{.})$ = $E(Y(\textbf{s}))$ i.e., the expected value of
+the process at that location.
+
+### Process Model:
+
+The continuous response variables is assumed to follow a gaussian
+process. So, the vector of response values
+$[Y(\boldsymbol{s_1}), Y(\boldsymbol{s_2}) \ldots~Y(\boldsymbol{s_n})]$
+at n locations is denoted in a vector-matrix form as:
+
+$$Y \sim \mathcal{N}(\mu, \boldsymbol{\Sigma)}$$ for a mean vector
+$\boldsymbol{\mu}$ and variance-covariance matrix $\boldsymbol{\Sigma}$.
+The structure of the variance-covariance matrix is different from the
+one used in Ordinary Least Squares model. Using some generality, the
+structure of the variance-covariance matrix is given by:
+
+$$\sum = \begin{bmatrix} \sigma^2 & f(d_{12}) & f(d_{13}) & \ldots & f(d_{1n})\\
+f(d_{21}) & \sigma^2 & f(d_{23}) & \ldots & f(d_{2n}) \\
+\vdots & \vdots & \vdots & &\vdots
+\\f(d_{n1}) & f(d_{n2}) & f(d_{n3}) & \ldots & \sigma^2
+\end{bmatrix}$$
+
+where $d_{ij}$ represents the distance between $i^{th}$ and $j^{th}$
+sample location and $f$ is a function that maps that distance to some
+function that quantifies the correlation e.g. and exponential function.
+This function $f$ incorporates all the necessary information about the
+correlation structure assumed to be present in the data. This
+variance-covariance structure allows a practitioner to include the
+correlation information between the values based on a distance metric
+and hence, the First Law of Geography is presented here in a quantified
+manner.
+
+Certain assumptions are made about the geostatistical process before
+modelling the data. These include the assumption of weak-stationarity
+and isotropy.
+
+The process is weakly-stationary if:
+
+-    it has constant mean throughout the study region i.e., the mean is
+    not dependent on the location. Mathematically,
+    $E(Y(\textbf{s}) = \mu ~\forall~ \textbf{s}$
+
+```{=html}
+<!-- -->
+```
+-   the covariance (and therefore, correlation) between two sample
+    values is a finite constant and only only depends on the
+    displacement vector between the two locations, which is
+    mathematically stated as,
+    $Cov[Y(\textbf{s}),Y(\textbf{t})] = C(\textbf{h})$, where
+    $\textbf{h}$ = $||\textbf{t}-\textbf{s}||$.
+
+A further assumption regarding the covariance is made which leads to
+'isotropy'. The process is isotropic in nature if:\
+
+-   the covariance between two sample values only depends on the
+    euclidean distance between the two sample locations and is
+    independent of the direction at which two sample locations are
+    considered i.e.,
+    $C(\textbf{h}) = C(~||\textbf{h}|| = \sqrt{h_1^2 + h_2^2}~)$.
+
+The covariance structure of the $\boldsymbol\Sigma$ depends on certain
+parameters that are estimated from the data and thus, is written as
+$\boldsymbol\Sigma(\boldsymbol{\theta})$, where
+$\boldsymbol\theta = [\sigma^2~\tau^2~\phi]$.\
+
+-   $\sigma^2$ is called partial sill and is defined as the amount of
+    smooth variation in the data.\
+-   $\tau^2$ is called nugget effect and is defined as the amount of
+    random variation present in the data.\
+-   $\phi$ is called range parameter and is the defined as the distance
+    at which the sample points become uncorrelated.
+
+The most commonly used covariance models used to model the spatial
+autocorrelation are as follows:
+
+$$\boldsymbol\Sigma(\boldsymbol\theta) = \sigma^2\text{exp}(-\textbf{D}/\phi) + \tau^2\textbf{I} \hskip5ex(Exponential~ model)$$\
+$$\boldsymbol\Sigma(\boldsymbol\theta) = \sigma^2\text{exp}(-\textbf{D}^2/\phi) + \tau^2\textbf{I} \hskip5ex(Gaussian~ model)$$
+
+$$\boldsymbol\Sigma(\boldsymbol\theta) = \sigma^2[1-\frac{3}{2}(\textbf{D}/\phi)~+~\frac{1}{2}(\textbf{D}/\phi)^3] + \tau^2\textbf{I} \hskip5ex(Spherical~ model)$$
+
+The choice of covariance model is based on a model fitting criterion
+such as AIC, BIC, or by their predictive ability using cross-validation.
+
+### Detecting spatial autocorrelation
+
+The correlation component in the spatial data is assessed using a
+Semi-Variogram. It is a plot of 'Semi-Variance' against distance which
+tells the practitioner whether or not a spatial model is adequate for
+the data. Semi-variance, in simple terms, is defined as a measure of
+dissimilarity between two sample values at a certain distance.
+Mathematically, semi-variance for a spatial process is stated as:
+
+$$\gamma(s,t) = \frac{1}{2}\text{Var}[Y(s)-Y(t)]$$
+
+As the semi-variogram is a population measure, an estimate is used in
+place, called binned empirical semi-variogram. The method to create a
+binned empirical semi-variogram is as follows:
+
+-   the statistical range of distances between all pairs of values
+    respective to its co-ordinates is calculated and categorized into k
+    intervals.
+
+-   For each interval, considering all values that lie within it, sum of
+    squared difference between all pairs of points are calculated and is
+    divided by $2|N(h_k)|$, where $|N(I_k)|$ is the total number of
+    values or points within that interval, i.e.
+
+$$\frac{1}{2|N(h_k)|}\Sigma[y(s)-y(t)]^2$$
+
+-   The above values are plotted against the midpoint of each interval.
+
+-   Along with the binned empirical semi-variogram, a Monte-Carlo
+    envelope is calculated that simulates the upper and lower bound of
+    semi-variance values expected at each distance under randomness.
+
+-   When this is calculated for each of the four direction, it is called
+    a directional semi-variogram and helps to assess the isotropy
+    assumption.
+
+The way to interpret this estimate of semi-variogram is, if
+semi-variance values lie outside the estimated upper and lower bounds,
+then there is evidence of spatial auto-correlation in the data. For the
+directional semi-variogram, if the semi-variogram looks reasonably
+similar at each direction, isotropy assumption is validated. The binned
+empirical semi-variogram is only assessed at shorter distances
+(generally half the maximum distance) as the estimated bounds are
+unstable for larger distances.
+
+There is a close relationship between the covariance structure and
+semi-variance as one determines the other. Thus, different covariance
+structures give different variogram models, which results to different
+shapes of binned empirical semi-variogram. Using the definitions, the
+relationship is expressed mathematically as:
+
+$$\gamma(\boldsymbol{s},\boldsymbol{t})= \frac{1}{2}Var[Y(\boldsymbol{s})-Y(\boldsymbol{t})]\\ \hskip5ex =
+\frac{1}{2}[Var(Y(\boldsymbol{s})+Var(Y(\boldsymbol{t})) - 2Cov(\boldsymbol{s}, \boldsymbol{t}))]$$
+
+Under the assumptions of isotropy and weak stationarity, the equation
+can be further reduced to:
+
+$$\gamma(h) = C(0)-C(h)$$
+
+### Estimating Parameters
+
+The spatial process
+$$Y = [Y(\boldsymbol{s_1})\ldots~Y(\boldsymbol{s_n})] \sim \mathcal{N}(\boldsymbol\mu(\boldsymbol{s}), \boldsymbol\Sigma(\boldsymbol\theta))$$
+has two classes of parameters that are estimated from the data. The mean
+function $\boldsymbol\mu(\boldsymbol{s)}$ is modeled via a linear
+approach and takes the parametric form $X\boldsymbol\beta$ which is
+similar to the one seen in OLS model. The other class of parameters
+specific to the spatial model is the ones in the covariance structure
+i.e $\boldsymbol\Sigma(\boldsymbol\theta)$ as defined above.
+
+The beta parameters are estimated in such a way that it incorporates the
+information of spatial correlation. The estimation can be conducted
+either by Maximum Likelihood Estimation or a Bayesian Approach, but the
+software used for the analysis of data in hand uses the Maximum
+Likelihood approach. The general form of the estimated beta parameters
+is as follows:
+
+$$\hat{\boldsymbol\beta}(\phi, \sigma^2,\tau^2) = (\boldsymbol{X}^TV(\phi, \sigma^2,\tau^2)\boldsymbol{X})^{-1}\boldsymbol{X}^TV(\phi, \sigma^2,\tau^2)\boldsymbol{Y}$$
+where, the expression for $V(.)$ varies for each covariance model, but
+it is always dependent on the three covariance parameters. The closed
+form solution is reminiscent of the OLS model solution, but differs from
+that as it includes the extra $V(.)$ term to include the spatial
+correlation information. The estimates of the $(\sigma^2, \tau^2, \phi)$
+are calculated from the data and plugged into the above formula to
+estimate the beta parameters.
+
+The confidence intervals can be calculated after the model fitting to
+assess the uncertainty associated with the estimated parameter value:
+
+$$\hat\beta_i(\hat\phi, \hat\sigma^2, \hat\tau^2)\pm~t(n-p, \frac{\alpha}{2})\sqrt{(\boldsymbol{X}^TV(\hat\phi, \hat\sigma^2, \hat\tau^2)\boldsymbol{X})^{-1}_{ii}}$$
+
+It is noteworthy that uncertainty intervals are only available for the
+mean model parameters i.e. beta parameters and no interval is generated
+for the covariance parameters.
+
+The spatial model, by definition includes spatial autocorrelation and
+the estimates for the response values will be correlated depending on
+the strength of the correlation in the data as picked up the model,
+which implies that the residuals will also be correlated for the fitted
+values.Thus, the residuals need to be de-correlated and checked for
+independence, in order to assess whether spatial correlation is properly
+accounted by the model. This is done by decomposition of the
+variance-covariance matrix(e.g. by Singular Value Decomposition). The
+new residuals calculated are called 'innovations' and these will be used
+at the end to assess whether the model has properly accounted the
+spatial autocorrelation in the data.
+
+### Effects of Ignoring Spatial Correlation
+
+The most important consequence of naively ignoring the inherent spatial
+auto-correlation that may be present in the data, is the underestimation
+of uncertainty intervals. The assumption of independence between the
+observations, when there is some correlation, reduces the coverage of
+the intervals.(Ferraciolli M. A., Bocca F. F., Rodrigues L. H. A.). This
+is because the model assumes there are more independent pieces of
+information than there actually is. Thus, this could mislead the
+practitioners to be more certain about the predictions, when more
+uncertainty is warranted.
+
+### Summary of the Model Fitting Steps
+
+After the data cleaning and exploratory analysis phase, the analysis
+moves to model fitting. The steps involved in this phase can be
+summarized as follows:
+
+-   Fit an Ordinary Least Squares model to the data using a variable
+    selection strategy assuming no spatial autocorrelation.
+
+-   Calculate the residuals, perform model diagnostics (except for the
+    correlated residuals assumption) and re-iterate step 1 if required.
+
+-   After removing the linear trend due to co-variates via model
+    fitting, plot the residuals against the co-ordinates to spot the
+    inherent spatial trends and clusters.
+
+-   Using the residuals, also plot the binned empirical semi-variogram
+    to look for evidence of spatial autocorrelation and interpret the
+    plot accordingly.
+
+-   If evidence is found, use the spatial model to incorporate the
+    autocorrelation. Using a model fitting criterion (e.g. AIC) choose
+    the appropriate covariance model.
+
+-   After the spatial model is finalized and calculate the innovations.
+    Use the innovations to create a binned empirical semi-variogram.
+    Interpret the plot accordingly.
+
+\newpage
+
+# Analysis {#sec:analysis}
+
+```{r data-read, include=F}
+#shape file
+lead_shp <- st_read('input/GBASE_counties.shp')
+st_crs(lead_shp)  #british national grid crs used
+
+#transform crs to longitude latitude version
+lead_shp2 <- st_transform(x = lead_shp, crs='+proj=longlat +datum=WGS84 +no_defs')
+
+#data file
+lead_data <- read_csv('input/GbaseProjectPb.csv')
+str(lead_data)
+
+#Landuse is a categorical variable
+#need to transform it
+lead_data$Landuse <- factor(lead_data$Landuse)
+
+#sp object to make geometry directly from x-y coordinates
+#could transform it to longitude latitude version later using sp transform
+lead_sp <- st_as_sf(lead_data, coords = 1:2, crs = st_crs(lead_shp))
+
+#this corresponds to lead_shp2 i.e. longitude latitude coordinates
+#lead_sp2 <- st_transform(lead_sp, coords = 1:2, crs = '+proj=longlat +datum=WGS84 +no_defs')
+
+#longitude <- vector(mode = 'numeric', length = nrow(lead_sp))
+#latitude <- vector(mode = 'numeric', length = nrow(lead_sp))
+
+#for(i in 1:nrow(lead_sp2)){
+  #longitude[i] <- lead_sp2$geometry[[i]][[1]]
+  #latitude[i] <- lead_sp2$geometry[[i]][[2]]
+#}
+
+#make a copy of the data
+lead_data2 <- lead_data
+
+#set the coordinates
+
+#lead_data2 <- lead_data2 %>% mutate(longitude = longitude, latitude = latitude) %>%
+  #select(-c(X, Y)) %>% select(longitude, latitude, everything())
+
+
+#the county corresponding to the data collection
+st.intersection <- st_intersects(lead_sp$geometry, lead_shp$geometry)
+
+#create an empty vector to store county name
+demo <- vector(mode = 'character', length = length(st.intersection))
+
+#NONE corresponds to data collected outside the eight councils given
+for(i in 1:length(st.intersection)){
+  if(length(st.intersection[[i]]) == 0){
+    demo[i] <- 'NONE'
+  }
+  else{
+    demo[i] <-  lead_shp$NAME[st.intersection[[i]]]
+  }
+}
+
+
+
+#import county information indexed by st.intersection object
+lead_data2['county'] <- demo
+
+lead_data2['log2_Pb'] <- log2(lead_data2$Pb)
+
+#separate outliers..for that we need to find what points are outliers
+#zscore function
+
+zscore <- function(x){
+  (x - mean(x, na.rm = T))/sd(x, na.rm = T)
+}
+
+#evaluate zscore
+log2_Pb_zscore <- zscore(lead_data2$log2_Pb)
+
+#filter out outlier indices 
+outlier_idx <- 1:2816
+outlier_idx <- outlier_idx[abs(log2_Pb_zscore) >3]
+outlier_idx <- outlier_idx[!is.na(outlier_idx)]
+
+#using outlier idx, create main and outlier data frame
+lead_data2_main <- lead_data2[!(seq(1, 2816) %in% outlier_idx), ]
+lead_data2_outlier <- lead_data2[outlier_idx, ]
+
+
+
+#correlation plot
+#lead_data2_main %>% select_if(is.numeric) %>% drop_na() %>%
+  #cor() %>% round(digits = 3) %>% corrplot::corrplot(method = 'number', type = 'upper')
+
+
+#spatial data, so we could use knn to impute the missing values
+knn_test_set <- lead_data2_main[is.na(lead_data2_main$log2_Pb), c('X', 'Y', 'log2_Pb')]
+knn_train_set <- lead_data2_main[!is.na(lead_data2_main$log2_Pb), c('X', 'Y', 'log2_Pb')]
+
+knn.fit <- knnreg(x = knn_train_set[, c('X', 'Y')], y = knn_train_set[, 'log2_Pb'][[1]], k = 5)
+knn.predictions <- predict(knn.fit, knn_test_set[, c('X', 'Y')])
+
+#map the knn predictions to see how good fit they are
+#ggplot() + geom_sf(data = lead_shp, fill = 'white') +
+#geom_point(aes(x = X, y = Y, color = log2_Pb), data = knn_train_set) +
+#scale_color_gradientn(colors = RColorBrewer::brewer.pal(n = 9, name = 'YlOrRd'))
+
+#impute the predictions into na values
+lead_data2_main[is.na(lead_data2_main$log2_Pb), "log2_Pb"] <- knn.predictions
+lead_data2_main[is.na(lead_data2_main$Pb), 'Pb'] <- 2^knn.predictions
+
+```
+
+## Data preparation {#sec:dataprep}
+
+The number of samples provided in the dataset is `r nrow(lead_data2)`. A
+skewness coefficient of `r round(skewness(lead_data2$Pb, na.rm = T), 3)`
+and the adjoining box-plot and density plot suggested a transformation
+of the variable before analysis. Log base-2 transformation was applied
+and the result of the transformation is presented in the graph below.
+
+```{r Pbboxplot, fig.cap = '\\label{fig:transformplot} Effect of $log_2$ transformation on Pb variable', fig.pos = 'h', fig.height=4}
+pbbox <- lead_data2_main %>% ggplot(aes(x = Pb)) + geom_boxplot() +
+  theme_bw(12) + labs(title = 'Box-plot of Pb') +
+  theme(title = element_text(size = 10))
+
+pbdensity <- lead_data2_main %>% ggplot(aes(x = Pb)) + geom_density() +
+  theme_bw(12) + labs(title = 'Density Plot') +
+  theme(title = element_text(size = 10))
+
+lpbbox <- lead_data2_main %>% ggplot(aes(x = log2_Pb)) + geom_boxplot() +
+  theme_bw(12) + labs(title = expression(paste('Box-plot of Pb at ','log'[2], ' scale')), x = expression(paste('log'[2], ' Pb'))) +
+  theme(title = element_text(size = 10))
+
+lpbdensity <- lead_data2_main %>% ggplot(aes(x = log2_Pb)) + geom_density() +
+  theme_bw(12) + labs(title = expression(paste('Density plot of Pb at ','log'[2], ' scale')), x = expression(paste('log'[2], ' Pb')))+
+  theme(title = element_text(size = 10))
+
+grid.arrange(pbbox, pbdensity, lpbbox, lpbdensity, nrow = 2)
+
+```
+
+After the transformation, thirty outliers were spotted and were
+separated out to a different dataset to reduce noise for the statistical
+models. These outliers were analyzed differently after the analysis of
+non-outlier data points. 3-Standard Deviation rule was applied to locate
+an outlier. A total of 26 missing values were found in the response
+variable. Since the process being studied is roughly contiguous in
+nature, K-Nearest Neighbor using K = 5 was implemented to impute those
+missing values. Corresponding county information was collected from the
+shape file which will allow between and within county analysis. Based on
+evidence shown in plots \ref{fig:countyconf} and \ref{fig:heatmap}, two
+new features were created and the rationale for which is explained in
+the section \ref{sec:trend}.
+
+## Spatial Trends and Clusters {#sec:trend}
+
+The map of the Pb concentration with their corresponding sample location
+is provided below:
+
+![](lead_conc_py2.png "Map of Lead Concentration at sample locations.")
+
+The data used in the plot is in log base-2 scale but another colorbar
+relative to original scale is also provided so as not to skew any
+interpretation. The locations of outliers are marked in black. There
+were no clusters of outliers which tells us that these unusual values
+were not from specific regions. Some features of the map are noteworthy.
+Evidently some clusters can be seen, specifically in the Glasgow City
+Region. A short term spatial correlation is also evident as sample
+locations near to each other have roughly similar values. No clear trend
+is apparent from this map.
+
+```{r avgtable}
+lead_data2_main %>% filter(county != 'NONE') %>% group_by(county) %>%
+  summarise(Min = min(Pb), Q1 = quantile(Pb, 0.25), Mean = mean(Pb),
+            median = median(Pb), Q3 = quantile(Pb, 0.75), Max = max(Pb),
+            Stdev = sd(Pb), SampleSize = n()) %>%
+  kable(caption = '\\label{tab:pbsummary} Summary Statistics of Pb for each county.', digits = 2, ) %>%
+  kable_styling(font_size = 10, latex_options = 'hold_position', full_width = F) %>%
+  
+  row_spec(0, bold= T)
+```
+
+The summary statistics for Pb concentration across county is given by
+the table \ref{tab:pbsummary}. Some points to note are as follows:
+
+-   The sample size for each county is large, so the summary statistics
+    and any relevant inferences made are valid.
+
+-   The median for Glasgow City Council is higher than any other
+    counties.
+
+-   The variability for each county is roughly similar as shown by the
+    standard deviation measure.
+
+Because of the high skewness in the Pb concentrations, values at log
+scale are used for analysis hereafter unless specified otherwise. A 95%
+confidence interval along with the mean for each county is shown by the
+graph below.
+
+```{r countyconf, fig.pos = 'h', fig.height=3, fig.cap= '\\label{fig:countyconf} Mean Values with uncertainty interval across Counties.'}
+
+county_interval <- lead_data2_main %>% group_by(county) %>%
+  summarise(mean = mean(log2_Pb), lower = mean(log2_Pb) - qt(0.975, n() - 1)*(sd(log2_Pb)/sqrt(n())),
+            upper = mean(log2_Pb) + qt(0.975, n() - 1)*(sd(log2_Pb)/sqrt(n())),
+            n = n() )
+
+county_interval %>% filter(county != 'NONE') %>%
+  ggplot(aes(y = fct_reorder(county, mean), x = mean)) + 
+  geom_point() +
+  labs(y = NULL, x = expression(paste('log'[2], ' Pb')))+
+  geom_errorbar(aes(xmin = lower, xmax = upper), width = 0.5) +
+  theme_bw() +
+  theme(title = element_text(size = 10))
+```
+
+Since log transformations are one-to-one transformations of the measure,
+the values can be directly converted to original scale by raising each
+of them to the power of 2. Direct inferences could be made on
+differences of means for each county based on whether or not there is
+overlap between the intervals. Glasgow City, Inverclyde, and
+Renfrewshire councils make a cluster in the high concentration side.
+This suggest feature engineering to create an indicator variable
+indicating whether the observation corresponds to these counties in
+order to allow the statistical models recognize the signals in the data.
+The variable is referred to as `High Concentration County` in the report
+wherever necessary. There are a total of 13 categories in `Landuse`
+variable used in the dataset. The frequency of the categories is
+depicted in the bar graph \ref{fig:landusebar}.
+
+```{r landusebar, fig.pos = 'h', out.height='30%', fig.cap=  "\\label{fig:landusebar}. Mean Pb concentration in $log_2$ scale with samples sizes labelled.", out.width='70%', fig.align = 'center'}
+
+lead_data2_main %>% group_by(Landuse) %>%
+  summarise(mean.logpb = mean(log2_Pb), n = n()) %>%
+  ggplot(aes(x = fct_reorder(Landuse, n), y = mean.logpb)) +
+  geom_col(fill = 'white', color = 'black') +
+  geom_text(aes(label = n), position = position_dodge(width = 0.9), vjust= 1.5) +
+  scale_y_continuous(breaks = seq(0, 8, 1)) +
+  labs(x = 'Landuse', y = expression(paste('Mean log'[2], ' Pb'))) +
+  theme_bw() + theme(title = element_text(size = 10))
+```
+
+\newpage
+
+The average Pb concentration varies little in cases of high
+concentration categories, with the exception of `Landuse` category
+\`19\` , but the sample size is low in relation to statistical
+standards. The interaction of `Landuse` and `County` variables is well
+visualized by the graph \ref{fig:heatmap} which gives a heatmap of
+concentration across `Landuse` and \`County\` variable. Low sample size
+categories were removed before plotting.
+
+```{r heatmap, fig.pos = 'h', out.height='30%', out.width='70%', fig.cap= "\\label{fig:heatmap} Heatmap of Pb concentation across Counties and Landuse", fig.align = 'center'}
+
+lead_data2_main %>% filter((Landuse %in% c(1, 3, 4, 20, 21)) & (county != 'NONE')) %>%
+  group_by(Landuse, county) %>% summarise(mean.logpb = mean(log2_Pb)) %>%
+  ggplot(aes(Landuse, county, fill = mean.logpb)) +
+  geom_raster() +
+  scale_fill_gradientn(colors = brewer.pal(9, 'YlOrRd')) +
+  theme_bw() +
+  labs(x = 'Landuse',y = NULL,  fill = expression(paste('Mean', ' log'[2], ' Pb', '\n'))) +
+  theme()
+
+```
+
+```{r landusedf, include = F}
+landuse_analysis <- lead_data2_main %>% filter(Landuse %in% c(1, 3, 4, 20, 21)) %>%
+  select(log2_Pb, Pb, Landuse, county)
+```
+
+The categories 20 and 21 generally had high level of Pb concentration
+across all counties and, also had little differences in their summary
+statistics. Based on this fact, another feature was created indicating
+whether the `Landuse` was 20 or 21, which is referred to as
+`landuse2021` wherever necessary. As already implied by the figure
+\ref{fig:countyconf}, the counties Glasgow City, Renfrewshire and
+Inverclyde had high concentration values irrespective of the type of
+land.
+
+\newpage
+
+An Ordinary Least Squares model was implemented to remove the linear
+trend by the recorded co-variates. A forward variable selection strategy
+was used to select the variables and build the OLS model. 5%
+significance level was chosen in order to select the significant
+variables. The summary of the final chosen OLS model is given in the
+table \ref{tab:ols}. Using this, potential predictive co-variates for
+the spatial model were chosen.
+
+```{r olsmodel, include = T}
+lead_data2_main <- lead_data2_main %>% mutate(landuse2021 = as.factor(as.numeric(Landuse %in% c(20, 21))),
+                           high_conc_county = as.factor(as.numeric(county %in% c('Glasgow City', 'Renfrewshire', 'Inverclyde'))))
+
+model1 <- lm(data = lead_data2_main, log2_Pb ~ Y + Elevation + MRRTF + Population +  high_conc_county + landuse2021)
+
+model1_table <- cbind(c("", "Intercept", "Y", "Elevation", "MRRTF", "Population", "High concentration county", "20 or 21 Landuse"),
+           c( "Estimate", sprintf("%.7f", model1$coefficients)), 
+           c("P-value", "$ 5.86 \\times 10^{-12}$", "$1.97 \\times 10^{-4}$", "$2 \\times 10^{-16}$", "$7.02 \\times 10^{-9}$", "$2.87 \\times 10^{-15}$", "$1.22 \\times 10^{-5}$", "$1.46 \\times 10^{-3}$")
+           ) #later add interpretation to the table
+
+model1_table <- rbind(model1_table, c("$\\textbf{Adjusted R-squared}$", 0.135, ""))
+
+model1_table %>% kable(align="c", escape = F, caption = "\\label{tab:ols} Summary of the OLS model") %>%
+  kable_styling("hover", full_width = F, font_size = 11, latex_options = "hold_position") 
+```
+
+Residual analysis, via diagnostic plots allowed to confirm that the
+model assumptions associated with non-spatial model are satisfied. The
+diagnostic plots are provided in the plot \ref{fig:olsdiagnostic}.
+
+```{r olsdiagnostic, fig.pos= 'h', fig.cap = '\\label{fig:olsdiagnostic} Diagnostic Plots for the fitted OLS Model.', out.width= '70%', out.height= '70%', fig.align = 'center'}
+par(mfrow = c(2, 2))
+plot(model1, ask = F, which = c(1, 2, 4, 5))
+
+```
+
+From the plots, it is seen that the residuals are evenly spread out
+around the value zero, do not exhibit any pattern to indicate
+non-linearity or non-constant variance, and are roughly normally
+distributed as seen from the Q-Q plot. The cook's distance for all
+observations are also less than 1 indicating none of them are potential
+outliers. The independence of the errors will be assessed with the
+binned empirical semi-variogram.
+
+The plot of residuals against co-ordinates in the figure
+\ref{fig:geoplot} suggests no apparent spatial trend in the East-West or
+North-South direction. The first of the four plots uses quantiles to
+color-code the residuals, using which one could see some clusters in
+data region. The density plot reveals the normality of residuals which
+was shown in figure \ref{fig:olsdiagnostic} Q-Q plot.
+
+```{r residgeo, include=F}
+#calculate residuals
+model1.resid <- residuals(model1)
+
+#create a dataframe containing residuals, longitude and latitude
+model1.usedXY <- lead_data2_main %>% select(-Aspect) %>% drop_na() %>% select(X, Y)
+
+model1_resid_data <- data.frame(resid = model1.resid, 
+                                easting = model1.usedXY$X, northing = model1.usedXY$Y)
+
+#create geodata data type
+model1_resid_geodata <- as.geodata(model1_resid_data, coords.col = 2:3, data.col = 1, borders = F)
+#plot(model1_resid_geodata)
+
+quart <- function(x){
+  quantile(x, c(0, 0.25, 0.5, 0.75, 1))
+}
+
+#bin the residuals to appropriate quantiles
+model1_resid_data <- model1_resid_data %>% mutate(quant.resid = cut(resid, quart(resid)))
+
+#create the variogram to assess spatial correlation
+model1_resid_variog <- variog(model1_resid_geodata)
+
+#create the Monte-carlo envelope
+model1_resid_mc <- variog.mc.env(model1_resid_geodata, obj.variog = model1_resid_variog, nsim = 200)
+
+#calculate directional variogram 
+model1_resid_dirvar <- variog4(model1_resid_geodata)
+
+```
+
+```{r residplot, fig.cap = '\\label{fig:geoplot} Residual Analysis for Clusters and Trends.', out.width= '80%', out.height='70%', fig.align = 'center'}
+p1 <- model1_resid_data %>% ggplot(aes(easting, northing, color = quant.resid)) +
+  geom_point(size = 1) + theme_bw() +
+  theme(legend.position = 'none') + scale_color_brewer(type = 'div') +
+  labs(x = 'Eastings', y = 'Northings')
+
+p2 <- model1_resid_data %>% ggplot(aes(easting, resid)) +
+  geom_point() + theme_bw() + labs(x = 'Eastings', y = 'Residuals')
+
+p3 <- model1_resid_data %>% ggplot(aes(northing, resid)) +
+  geom_point() + theme_bw() + labs(x = 'Northing', y = 'Residuals')
+
+p4 <-model1_resid_data %>% ggplot(aes(x = resid)) +
+  geom_density() + theme_bw() + labs(x = 'Residuals')
+
+grid.arrange(p1, p2, p3, p4, nrow = 2)
+
+```
+
+The short term spatial auto-correlation is assessed by the figure
+\ref{fig:variograms}. The semi-variance at euclidean distance less than
+\~5000 lies outside the Monte-Carlo envelope suggesting very short term
+correlation, which needed to be addressed. Thus the OLS model is
+adjusted accordingly to incorporate that information. Again, for short
+distances, the directional variogram for each direction seems quite
+similar, thus validating the isotropy assumption.
+
+```{r plot capture, include=F}
+plot(model1_resid_dirvar, legend = F)
+legend('bottomleft', legend = c('0°', '45°', '90°', '135°'), col = c('black', 'red', 'green', 'blue'), lty = 2, bty = 'n')
+title('Directional Variogram', cex.main = 1)
+divariog <- recordPlot()
+```
+
+```{r vardirvar, fig.cap = '\\label{fig:variograms} Empirical Variogram and Directional variogram to assess .', fig.pos= 'h', fig.align='center', out.height='50%', fig.align='center', out.width='90%'}
+
+variog <- data.frame(variog.u = model1_resid_variog$u, variog.v = model1_resid_variog$v,
+           upper = model1_resid_mc$v.upper, lower = model1_resid_mc$v.lower) %>%
+  ggplot(aes(x = variog.u, y = variog.v)) + geom_point() +
+  geom_line(aes(y = upper), linetype = 'dashed') +
+  geom_line(aes(y = lower), linetype = 'dashed') +
+  geom_point(aes(x = variog.u[1], y = variog.v[1]), pch = 21, size = 6, color = 'red') +
+  scale_x_continuous(breaks = c(0, 10000, 20000, 30000, 40000, 50000, 60000))+
+  scale_y_continuous(breaks = seq(0.5, 1.5, 0.15)) + 
+  labs(x = 'Distance', y = 'Semivariance', title = 'Empirical Variogram of OLS Model residuals') +
+  theme_bw() +
+  theme(title = element_text(size = 10)) +
+  xlim(c(0, 50000))
+
+plot_grid(variog, divariog, ncol= 2)
+```
+
+## Effects of Co-variates on Spatial Pattern
+
+Following the evidence of short-term spatial correlation among the
+values of concentration, a spatial model with exponential correlation
+structure was fitted at first. The choice of co-variates to be used was
+decided from the significant variables in the OLS model and the choice
+of correlation structure was arbitrary, but is almost always the default
+choice in spatial models.
+
+```{r geodat, include = F}
+#create geodata data type for spatial model
+lead_data2_main.geodata <- as.geodata(lead_data2_main %>% select(-Aspect),
+                                      coords = 1:2, data.col = 14,
+                                      covar.col = c(3:13, 15:16), borders =F)
+
+#confidence interval function
+confIntSpatial <- function(model){
+  std_error <- sqrt(diag(model$beta.var))
+  df <- length(lead_data2_main.geodata$data) - (model$npars - length(model$cov.pars) - 1)
+  
+  cbind(
+    (model$beta - qt(0.975, df)*std_error),
+    (model$beta + qt(0.975, df)*std_error)
+  )
+}
+
+#running the model takes ~25 minutes
+#model was saved as R object in a .RDS file and is loaded
+#when required.
+
+#spatial_model4.0 <- likfit(lead_data2_main.geodata,
+                           #trend = ~Y + Elevation + MRRTF + Population + landuse2021 + high_conc_county,
+                           #ini.cov.pars = c(0.25, 6000),
+                           #fix.nugget = F, cov.model = 'exponential')
+
+#saveRDS(spatial_model4.0, 'spatial_model_exp.rds')
+
+#check the uncertainty intervals for beta parameters
+spatial_model4.0 <- readRDS('spatial_model_exp.rds')
+spatial_confint <- as.data.frame(confIntSpatial(spatial_model4.0))
+
+#reduce the co-variates used in the model to include
+#only significant co-variates.
+
+```
+
+```{r coeftable, include = T}
+spat_mod_table <- cbind(c("", "Intercept", "Y", "*Elevation", "*MRRTF", "*Population", "*Landuse category 20 or 21", "High Concentration County"),
+           c( "Estimate", sprintf("%.7f", spatial_model4.0$beta)), 
+           c("Coefficient Interpretation", " ", "1000m increase implies 0.0071 decrease in log2 Pb.",
+  "100m increase implies 0.005 decrease in",
+  "1 unit increase implies 0.071 increase in",
+  "1000/sq.km. increase implies 0.068 increase in log2 Pb",
+  "0.085 increase in log2 Pb if landuse 20 or 21",
+  "0.005 increase in log2 Pb if high concentration county."
+))
+
+spat_mod_table <- rbind(spat_mod_table, c("$\\textbf{AIC Spatial Model}$", round(AIC(spatial_model4.0),3), "", ""))
+spat_mod_table <- rbind(spat_mod_table, c("$\\textbf{AIC OLS Model}$", round(AIC(model1), 3), "", ""))
+
+spat_mod_table %>% kable(align="c", escape = F, caption = "\\label{tab:ols} Spatial model summary with variables from OLS model.(* denotes significant variables)") %>%
+  kable_paper("hover", full_width = F, font_size = 10, latex_options = "hold_position")
+
+```
+
+A range of models with different correlation structures were used to
+choose the adequate model. After accounting for the spatial
+auto-correlation, the variables `Northing` and
+`High Concentration County` become insignificant at 5% significance
+level i.e, the effect of these variables dissipates after correlation is
+added to the model and were therefore removed from the spatial model.
+This effect was similar across the different models that were compared.
+The model adequacy criterion chosen was $AIC$, and as such, it was
+lowest for the model with exponential correlation structure, with a
+value of `r round(AIC(spatial_model4.0), 3)`. Comparing that with the
+$AIC$ value of the OLS model given by `r round(AIC(model1), 3)`, it was
+seen that the spatial model is indeed a better fit to the data. The
+smooth variation (given by partial sill $\sigma^2$), random variation or
+noise (given by $\tau^2$), and the correlation distance (given by
+$\phi$), as estimated by the model, were
+`r round(spatial_model4.0$sigmasq, 3)`,
+`r round(spatial_model4.0$nugget, 3)`, and
+`r round(spatial_model4.0$phi, 3)` respectively. Nugget effect is higher
+than partial sill, which when coupled with the fact that the range
+parameter is low compared to the full range of distances (as shown in
+the variogram figure \ref{fig:variograms}), suggested the presence of
+weak spatial auto-correlation, which nevertheless needed to be accounted
+for.
+
+\newpage
+
+## Outlier Analysis
+
+As already stated, there were a total of 30 outliers which were labelled
+by the 3-standard deviation rule. There were no unusual values for
+co-variates that differed distinctively from the ones in the non-outlier
+case. The topographical indices were well within range and no
+interaction of co-variates explained these atypical values. However, the
+distribution of number of outliers across `Landuse` categories gives
+some direction, as provided in the plot \ref{fig:outlierbar}. The
+importance of the categories' context is hence justified.
+
+```{r outliers, fig.height = 3, fig.cap = '\\label{fig:outlierbar} Number of Outliers across Landuse categories.', out.width= '70%', out.height='50%', fig.align='center'}
+
+lead_data2_outlier %>% count(Landuse) %>%
+  ggplot(aes(x = fct_reorder(Landuse, n), y = n)) +
+  geom_col(fill = 'white', color = 'black') +
+  theme_bw() +
+  labs(x = 'Landuse Category', y = NULL)
+
+```
+
+# Research Conclusion and Discussions {#references}
+
+The exploratory analysis along with the help of fitted models suggested
+that the Lead concentration had no discernible trends in North-South or
+East-West direction. Glasgow City council had the highest average level
+of Pb concentration, as was expected given the rich industrial heritage
+of the council. Landuse category 20 and 21 had high level of
+concentration irrespective of the councils. Some clusters of
+contamination were located in the maps. Glasgow City council had the
+most clusters which were easily visible in the concentration map. Most
+of the outliers were again from the Landuse category 20 and 21.
+
+Evidences of correlation among the values of concentration were found,
+but the degree of correlation was deemed to be weak. There was a lot of
+unexplained variation in the data that was not covered by the models,
+possibly because of the low predictive ability of the sampled
+co-variates. Some of the major indicators of soil contamination such as
+pH value, loss of ignition etc were not available, the presence of which
+could have improved the explainability of the models. Nevertheless,
+there were certain variables found to be statistically significant (the
+most important of which is the indicator of `Landuse` category 20 or
+21), but under the research context and their estimated effects, their
+practical significance is questionable.
+
+This piece of independent research work could be extended in many
+segments to glean more information from the data. A map of prediction at
+un-sampled locations could be provided after improving the spatial
+model, possibly by including co-variates with better predictive power or
+by using a more advanced predictive algorithm altogether. A clustering
+algorithm that can include values of response along with easting and
+northing to identify clusters could be used to discern more subtle
+clusters.
+
+# References {#sec:references}
+
+Lanphear BP, Matte TD, Rogers J, Clickner RP, Dietz B, Bornschein RL,
+Succop P, Mahaffey KR, Dixon S, Galke W, Rabinowitz M, Farfel M, Rohde
+C, Schwartz J, Ashley P, Jacobs DE. The contribution of
+lead-contaminated house dust and residential soil to children's blood
+lead levels. A pooled analysis of 12 epidemiologic studies. Environ Res.
+1998 Oct;79(1):51-68. doi: 10.1006/enrs.1998.3859. PMID: 9756680.
+
+Needleman H. L., Schell A., Bellinger D., Leviton A., Alred E. N. 1990
+Jan. Long-term effects of exposure to low dose of Lead in childhood. The
+New England Journal of Medicine .
+
+Fordyce, F.M.; Nice, S.E.; Lister, T.R.; O Dochartaigh, B.E.; Cooper,
+R.; Allen, M.; Ingham, M.; Gowing, C.; Vickers, B.P.; Scheib, A**.**.
+2012 Urban soil geochemistry of Glasgow*.* Edinburgh, UK, British
+Geological Survey, 374pp. (OR/08/002) (Unpublished).
+
+Urban Soil Geochemistry of Glasgow - Main report: Land Use Planning and
+Development Programme Open Report OR/08/002.
+https://nora.nerc.ac.uk/id/eprint/18009/
+
+National Land Use Database: Land Use and Land Cover Classification
+version 4.4 2006 Feb.
+https://assets.publishing.service.gov.uk/government/uploads/system/uploads/attachment_data/file/11493/144275.pdf
+
+Ferraciolli M. A., Bocca F. F., Rodrigues L. H. A. 2019 Jun., Neglecting
+spatial autocorrelation causes underestimation of the error of sugarcane
+yield models .
+
+Lee D. 2022, Stationarity and variograms, lecture notes block 2, Spatial
+Statistics 4H & 5M, University of Glasgow.
+
+Lee D. 2022, Modelling Geostatistical Data, lecture notes block 3,
+Spatial statistics 4H & 5M, University of Glasgow.
